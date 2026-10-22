@@ -1,0 +1,11 @@
+.tmp/
+__pycache__/
+*.pyc
+*.ts
+*.log
+isdbt_rio.inp
+*.inp
+
+java/out/
+java/build/
+java/.gradle/
