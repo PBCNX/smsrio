@@ -2,8 +2,9 @@
 
 Messages are an 8-byte little-endian header followed by a payload:
 ``<type u16><src u8><dst u8><length u16><flags u16>``. Control responses and
-the transport stream share the bulk-IN endpoint; streaming transfers are
-``512-byte header + 20 TS packets`` (see stream.py).
+the transport stream share the bulk-IN endpoint; a streaming transfer is a
+504-byte pad, the 8-byte header, then 20 TS packets at offset 512 (see
+stream.py).
 """
 import os
 import struct

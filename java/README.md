@@ -42,10 +42,34 @@ javac --release 8 -d out $(find src -name '*.java')
 java -cp out ph.pbcnx.smsrio.SelfTest
 ```
 
-Expected: `smsrio java self-test: OK`. The self-test needs no device.
+Expected: `smsrio java self-test: OK`. The self-test needs no device. Set
+`JAVA_HOME` (or put its `bin` on `PATH`) if `javac` is not found.
 
 ## Status
 
-Validated against the Python driver byte for byte; the live stream was proven on
-Windows at 509.143 MHz (33,280 packets, 0 sync errors). The Java path has not yet
-been run on an Android device.
+The wire constants, message framing, statistics layout, pending-queue behaviour
+and TS framer match the Python driver, and `SelfTest` covers them. These
+differences remain, mostly on the cold-boot path:
+
+* `bringUp(image)` reads the version before uploading. Python skips that probe
+  when the caller supplies an image, because on a cold ROM the 2 s timeout is a
+  cancelled read that can leave the IN pipe halted; Java still pays it. On a warm
+  unit given an image, Python uploads anyway and Java does not.
+* After the upload Java reads the version immediately; Python waits 0.5 s for
+  the device to restart first.
+* `request()` reads in 250 ms slices, where Python uses one read for the whole
+  budget; Python's comment says cancelling a read to re-issue it can lose the
+  reply on Windows.
+* `SmsFirmware` validates only that the header length fits the array. Python
+  requires exactly 91,048 bytes and the vendor image's SHA-256;
+  `SmsFirmware.SIZE` is declared but never checked.
+* `version()` trims trailing NUL bytes only; Python trims NULs and whitespace at
+  both ends.
+
+`SelfTest` does not exercise `bringUp`, the image check or the resync path, so it
+does not prove parity - it proves the control-plane bytes, the pending queue and
+the stream framing.
+
+The Java path has not been run on an Android device, so the host `Transport`
+implementation is still unexercised. The source compiles with `--release 8`
+against the bench JDK and `SelfTest` passes (2026-10-23).

@@ -28,12 +28,23 @@ CHUNK = 240
 
 
 def find(path=None):
+    """Locate the vendor image.
+
+    Order: an explicit path, ``SMSRIO_FIRMWARE``, the repo root, then
+    ``vendor/firmware/``.  The last one is where the private tree tracks the
+    image (the public snapshot withholds it), so a private clone works without
+    copying anything first.
+    """
     if path:
         return path
     env = os.environ.get("SMSRIO_FIRMWARE")
     if env:
         return env
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for candidate in (os.path.join(root, "isdbt_rio.inp"),
+                      os.path.join(root, "vendor", "firmware", "isdbt_rio.inp")):
+        if os.path.exists(candidate):
+            return candidate
     return os.path.join(root, "isdbt_rio.inp")
 
 
@@ -42,7 +53,8 @@ def load(path=None):
     if not os.path.exists(path):
         raise FileNotFoundError(
             "Siano firmware not found at %s; supply the vendor isdbt_rio.inp" % path)
-    image = open(path, "rb").read()
+    with open(path, "rb") as handle:
+        image = handle.read()
     if len(image) != SIZE or hashlib.sha256(image).hexdigest() != SHA256:
         raise ValueError("not the expected 91,048-byte isdbt_rio.inp")
     checksum, length, start = struct.unpack("<III", image[:12])

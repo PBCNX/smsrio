@@ -17,9 +17,9 @@ def message(msg_type, payload=b""):
 
 
 def ts_message(pid, counter_seed):
-    """A plausible stream transfer: 21 TS packets with distinct bytes."""
+    """A plausible stream transfer: 20 TS packets with distinct bytes."""
     body = bytearray()
-    for index in range(21):
+    for index in range(20):
         packet = bytearray(188)
         packet[0] = 0x47
         packet[1] = (pid >> 8) & 0x1F

@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from smsrio import firmware
 from smsrio.cli import open_device
 
-IMAGE = r"D:\Profile\Documents\Claude\pbcnx-isdbt\branches\TUNERAPP\vendor\firmware\isdbt_rio.inp"
+IMAGE = os.environ.get("SMSRIO_FIRMWARE") or None
 
 device = open_device(0)
 image = firmware.load(IMAGE)

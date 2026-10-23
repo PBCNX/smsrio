@@ -26,9 +26,10 @@ u16 msg_length    /* whole message, header included */
 u16 msg_flags
 ```
 
-Fields are little-endian. Requests from a BDA client use `src = 201`, the
-vendor `DVBT_BDA_CONTROL_MSG_ID`, and `dst = 11` (`HIF_TASK`); the device answers
-from 11 to 201.
+Fields are little-endian. The vendor BDA client sends `src = 201`
+(`DVBT_BDA_CONTROL_MSG_ID`) and `dst = 11` (`HIF_TASK`), and the device answers
+from 11 to 201. This driver sends `src = 0`; the device accepts it, and replies
+are matched on message type, so `src`/`dst` are not inspected.
 
 ### Split messages
 
@@ -61,15 +62,18 @@ Both carry the same 3,760-byte payload, so a driver should accept either.
 1. Open the interface and allocate the bulk endpoints.
 2. Query the version (`503`). A cold stick answers nothing or reports ROM; load
    `isdbt_rio.inp` with the download sequence (`660` data, validity `662`,
-   trigger `664`, reload exec `704`) and the device answers
-   `ISDBT 07.03.58.0 RIO`.
+   trigger `664`), and the device restarts itself and answers
+   `ISDBT 07.03.58.0 RIO`. The reload messages (`702`/`704`) are declared in
+   `firmware.py` but never sent: on this unit the trigger alone restarts it,
+   which is the sequence that was validated.
 3. Select the mode (`578`, `DEVICE_MODE_ISDBT_BDA = 7`) → `579`.
 4. Add a PID filter (`601`, `u32 pid`). The firmware does **not** answer this;
    Linux sends it and carries on, so neither should a host driver.
 5. Tune (`776`): `u32 frequency_Hz, u32 bandwidth, u32 12000000, u32 segment`
    → `777`. **The frequency field is Hz, not kHz.** The captured working run
    sends `0x23B63258` = 599,143,000 for 599.143 MHz; sending 599143 tunes a
-   thousand times too low and the statistics echo that lower value back.
+   thousand times too low and the statistics echo that lower value back. The
+   Python and Java APIs take kHz and multiply by 1000.
    `bandwidth = 8` is `BW_ISDBT_13SEG`.
 6. Do not wait for a stream command. The device starts pushing TS on its own
    about two seconds after tune: it needs to acquire the signal first. The
@@ -85,6 +89,12 @@ status: rf locked, demod locked, SNR 6 dB, in-band -79 dBm, offset -7.8 kHz
 stream: 6,256,640 bytes in 10 s = 33,280 packets, 0 sync errors, 5.0 Mbps
 tables: PAT 1680/1683/1688 -> PMT 1210/1130/8137, each H.264 (27) + audio (3)
 ```
+
+Re-checked 2026-10-23 from the saved capture in `.tmp` (the stick was not on the
+bus): 33,280 of 33,280 packets sync at 188-byte boundaries, 0 CC errors, 0 TEI;
+PAT programs 1680/1683/1688 point at PMT PIDs 1210/1130/8137, each carrying
+`0x1B` (H.264) and `0x03` (audio). That is analysis of the existing file, not a
+new measurement.
 
 599.143 MHz, the frequency used for the Linux capture, was off the air that
 day: in-band power sat at the noise floor (-90 dBm) and the demod never locked.

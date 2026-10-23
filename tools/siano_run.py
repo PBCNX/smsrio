@@ -1,6 +1,7 @@
 """Wait for a replug, then run the A/B measurement end to end.
 
-    python tools/siano_run.py --freq 599143 --seconds 20
+    python tools/siano_run.py --firmware vendor/firmware/isdbt_rio.inp \
+        --freq 599143 --seconds 20
 
 It arms, waits for the device address to change (a physical replug), then runs
 capture A with statistics polling every 500 ms and capture B with none, and

@@ -1,9 +1,9 @@
 """Siano Rio stream framing.
 
-Every streaming bulk transfer is 4,272 bytes: a 512-byte header followed by
-3,760 bytes = 20 complete MPEG-TS packets. Verified against a 28 MB capture:
-6,365/6,365 transfers had 0x47 at offset 512 and all 127,300 packet syncs were
-aligned.
+Every streaming bulk transfer is 4,272 bytes: a 512-byte prefix (504 bytes of
+pad, then the 8-byte message header) followed by 3,760 bytes = 20 complete
+MPEG-TS packets at offset 512. Verified against a 28 MB capture: 6,365/6,365
+transfers had 0x47 at offset 512 and all 127,300 packet syncs were aligned.
 """
 TS_PACKET = 188
 PACKETS_PER_TRANSFER = 20
