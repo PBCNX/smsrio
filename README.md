@@ -1,66 +1,75 @@
-# smsrio
+# smsrio — Siano SMS-series Rio ISDB-T dongle (`187f:0600`)
 
-User-space driver for Siano Rio ISDB-T tuners (`187F:0600`), for Windows, macOS
-and Linux through libusb. Python package now; a dependency-free Java core for
-Android is in `java/` (same protocol, not yet run on a device).
+User-space driver for the ISDB-T dongle sold as the **Siano MDTV Receiver** (Siano SMS-series Rio). It speaks the
+dongle's own USB protocol, uploads its firmware, tunes, and streams MPEG-TS to a file, stdout or UDP; it also reads
+the multiplex's transmission parameters (TMCC) from the demodulator's own statistics. Python over libusb (pyusb is
+vendored, so there is nothing to install); a dependency-free Java core for Android lives in `java`.
 
-## Status
+**Our own code, no vendor code.**
+
+## Device
 
 | | |
 |---|---|
-| Control path | version `503`, init mode `578`, PID filter `601`, tune `776` (wire value in Hz) |
-| Stream framing | 4,272-byte transfer = 504 pad + 8-byte header + 20 × 188 TS |
-| Data message | `607` (`DAB_CHANNEL`) on this firmware, `693` on older captures |
-| Validation | 2026-10-21, live 509.143 MHz: 33,280 packets, 0 sync errors, 5.0 Mbps, PAT/PMT, H.264 + audio |
-| Hardware | validated on Windows through libusb; macOS and Linux untested |
+| USB ID | `187f:0600` |
+| Chip | Siano SMS-series Rio ISDB-T demodulator, 6 MHz raster |
+| Endpoints | `0x02` OUT commands, `0x81` IN responses **and** MPEG-TS |
+| Status | lock, SNR, RSSI, in-band dBm and carrier offset, from the demod's own statistics |
+| TMCC | mode, guard interval, partial reception, layers (modulation, code rate, interleave, segments) and the EWBS bit |
+| Stream | 20 × 188-byte TS packets per transfer, payload at offset 512 |
 
-The device streams by itself once the demod locks, roughly two seconds after a
-tune. There is no "start streaming" command.
+## Platforms
 
-The stick was last on the bus on 2026-10-21; the validation figures are from
-that run and have not been re-measured since.
+Windows (WinUSB), Linux (a Raspberry Pi 5, over SSH) and macOS (Intel) are measured on hardware, including the
+recovery suite: cold start, a 20 s stream, three wedge-and-recover cycles, a mid-stream detach with a rebuild, and
+an absent stick. Android is measured as a library: this package's provider has opened a stick inside a host app
+on Android 14. The adapter under `java/android/` implements the host's tuner contract (`com.pbcnx.tuner`), which
+the host application provides; the core under `java/src/` has no dependency at all. No kernel driver is involved: libusb over WinUSB on Windows, udev on Linux, libusb on macOS.
 
-## Usage
+## Install
+
+From a checkout — pyusb is vendored, so no `pip install` is needed.
+
+```bash
+python -m smsrio --version      # smsrio 0.2.0 (smsrio-pbcnx)
+python -m smsrio list           # finds the 187f devices present
+```
+
+- **Windows**: bind the dongle to WinUSB with [Zadig](https://zadig.akeo.ie/) and replug it, then get
+  `libusb-1.0.dll` from <https://libusb.info> and set `SMSRIO_LIBUSB` to its full path (or copy it next to
+  `python.exe`). Zadig is the device binding; libusb is the library the driver loads.
+- **Linux**: `sudo cp udev/99-smsrio.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger`,
+  then replug. The rule grants `uaccess` plus group `plugdev` (needed over SSH, where there is no logind seat).
+- **macOS**: install libusb (`brew install libusb`); on Apple Silicon use an arm64 Python and libusb.
+
+**Firmware.** The image is not in this repository — it is vendor material. Supply your own with `--firmware PATH`
+or `SMSRIO_FIRMWARE`; it is checked for size (91,048 bytes) and SHA-256 before use. `--version` and `list` work
+without it; anything that opens the stick needs it.
+
+## Use
 
 ```bash
 python -m smsrio list
-python -m smsrio status --freq 509143      # lock, SNR, in-band power
-python -m smsrio probe  --freq 509143
-python -m smsrio play   --freq 509143 --out capture.ts --seconds 10
+python -m smsrio status --freq 485143
+python -m smsrio tmcc   --freq 485143
+python -m smsrio play   --freq 485143 --seconds 30 --out capture.ts
+python -m smsrio play   --freq 485143 --udp 127.0.0.1:1234 --live
 ```
 
-`--freq` is kHz (`509143` is 509.143 MHz); the wire field is Hz and the driver
-multiplies. `play` writes a file, stdout (`--out -`) or UDP (`--udp HOST:PORT`).
+`status` prints the demodulator's readings, `tmcc` the transmission parameters, `scan` sweeps a band (one line per
+channel, a channel counts only when packets arrive), and `recover` walks the recovery ladder on a locked-but-silent
+stick. `play` supervises the session: a pull is detected, the stick is polled for, reopened, brought up and
+re-tuned, and the same file keeps being written.
 
-`status` exits 0 when locked, 2 when the demod does not lock, and 1 when the
-device returns no statistics at all. A locked mux reads about -48 to -80 dBm
-in-band; a noise floor of about -90 dBm at every frequency means nothing is
-being received at that frequency.
+Android / JVM:
 
-## Firmware
-
-The Rio firmware (`isdbt_rio.inp`, 91,048 bytes, SHA-256
-`777c9ba2ce44db9e0a90f7207167e9095cc0223be2b2af599f645f1c73d76b14`) is vendor
-material and is not distributed. A unit that already runs firmware needs
-nothing. A cold unit needs the image, looked up in this order:
-
-1. an explicit path: `--firmware PATH`
-2. the `SMSRIO_FIRMWARE` environment variable
-3. `<repo>/isdbt_rio.inp`
-4. `<repo>/vendor/firmware/isdbt_rio.inp` (present only in the private tree)
-
-The loader refuses an image that is not exactly 91,048 bytes with that hash.
-
-## Test
-
-```bash
-python -m unittest discover -s tests
+```java
+Tuner tuner = new SmsRioProvider().open(context, device, firmware, listener);
+tuner.open();
+tuner.tune(485143);
 ```
 
-The Java core has its own dependency-free self-test; see [`java/README.md`](java/README.md).
+## License
 
-## Licence
+GPL-2.0-or-later — see `LICENSE`. `NOTICE` lists what is not ours.
 
-GPL-2.0 (see `LICENSE`). The vendored pieces keep their own licences:
-`vendor/usb` is pyusb (BSD-3-Clause) and `vendor/windows/x64/libusb-1.0.dll`
-is libusb (LGPL-2.1), both with their licence text alongside.

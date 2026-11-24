@@ -1,0 +1,31 @@
+smsrio
+Copyright (C) 2026 The SMSRio Open Driver Authors
+
+This project is licensed under the GNU General Public License, version 2 or
+(at your option) any later version. "Or later" is deliberate: the Android host
+is a GPL-3.0 combined work because it links other GPL-3.0 components, and a
+GPL-2.0-only driver could not be combined with it.
+See LICENSE for the full text.
+
+Third-party material:
+
+- vendor/usb is pyusb (BSD-3-Clause), copyright the pyusb authors; its
+  licence text is vendor/usb/LICENSE.
+- The firmware image (isdbt_rio.inp) is vendor material supplied by the device
+  vendor. It is not distributed with this project. Copyright remains with the
+  vendor.
+
+## Original work
+
+The driver code (`smsrio/`, `java/`) is original work by The SMSRio Open Driver
+Authors. Its protocol knowledge - message IDs, field layouts, values and the
+firmware update sequence - was observed on the device's own USB wire; no vendor
+or kernel source is copied, and the code is original work.
+
+## Provenance marker
+
+`smsrio-pbcnx` is a visible provenance/attribution string in the Python package
+(`smsrio.PROVENANCE`, printed by `--version`) and in the Java core. It is
+intended to make the origin searchable and to encourage the GPL notice to
+travel with copies. It is **not** telemetry: it performs no network or device
+I/O, carries no user or device identifier, and changes no protocol bytes.

@@ -1,8 +1,15 @@
+// The SMSRIO Java core: one java-library, no Android dependency, no tests in this tree.
+// The Android adapter is java/android/src/main/java; a host copies it into its app (9308 route).
+// GPL-2.0-or-later (see the repository LICENSE).
 plugins {
     id 'java-library'
 }
 
+group = 'com.pbcnx.drivers.smsrio'
+version = '0.2.0'
+
 java {
-    sourceCompatibility = JavaVersion.VERSION_1_8
-    targetCompatibility = JavaVersion.VERSION_1_8
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+    withSourcesJar()
 }

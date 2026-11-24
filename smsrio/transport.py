@@ -1,3 +1,7 @@
+# Copyright (C) 2026 The SMSRio Open Driver Authors
+# SPDX-License-Identifier: GPL-2.0-or-later
+# smsrio-pbcnx
+
 """USB transport for Siano Rio (187F:0600).
 
 Messages are an 8-byte little-endian header followed by a payload:
@@ -10,6 +14,9 @@ import os
 import struct
 import sys
 import time
+from collections import Counter
+
+from . import tmcc
 
 VID = 0x187F
 PID_RIO = 0x0600
@@ -24,9 +31,6 @@ MSG_VERSION_RES = 504
 MSG_INIT_REQ = 578
 MSG_INIT_RES = 579
 MSG_ADD_PID_REQ = 601
-MSG_ADD_PID_RES = 602
-MSG_GET_STATISTICS_REQ = 615
-MSG_GET_STATISTICS_RES = 616
 MSG_GET_STATISTICS_EX_REQ = 653
 MSG_GET_STATISTICS_EX_RES = 654
 MSG_DAB_CHANNEL = 607
@@ -122,6 +126,13 @@ class SmsDevice:
         self.alignment = 0
         self.pending = []
         self.dropped = 0
+        # A read error that is NOT a timeout (the device vanished, I/O error): the
+        # streaming loop keys the detach on this, never on an idle timeout.
+        self.last_read_error = None
+        # Counter-only instrumentation: these never change the protocol path.
+        # They exist so a bench run can say why it lost something instead of
+        # only that it did.
+        self.counters = Counter()
 
     def open(self):
         try:
@@ -139,14 +150,30 @@ class SmsDevice:
         return self
 
     def close(self):
+        util = _pyusb()
         try:
-            _pyusb().release_interface(self.usb, 0)
+            util.release_interface(self.usb, 0)
+        except Exception:
+            pass
+        # release_interface only drops the claim; the libusb handle stays open
+        # until dispose_resources.  Without this a second open in the same
+        # process fails with "Access denied" (measured 2026-11-04).
+        try:
+            util.dispose_resources(self.usb)
         except Exception:
             pass
 
     def send(self, msg_type, payload=b"", src=0, dst=HIF_TASK, flags=0):
         body = struct.pack("<HBBHH", msg_type, src, dst, 8 + len(payload), flags)
-        self.usb.write(EP_OUT, body + payload, self.timeout)
+        self.counters["writes"] += 1
+        try:
+            self.usb.write(EP_OUT, body + payload, self.timeout)
+        except Exception as error:
+            self.counters["write_errors"] += 1
+            # Normalize: callers key detach/recovery on TransportError, never on a raw
+            # usb.core.USBError (a pull during a status poll must reach the supervisor).
+            raise TransportError(str(error))
+        self.counters["bytes_out"] += len(body) + len(payload)
 
     def _decode(self, data):
         """Split-aware header parse; returns (type, src, dst, body) or None.
@@ -175,31 +202,59 @@ class SmsDevice:
         that answers nothing until it is unplugged.  clear_halt costs one
         request and fixes it.
         """
+        self.counters["reads"] += 1
+        # pyusb's bulk read takes an integer millisecond timeout; the request
+        # loops pass a float (remaining * 1000).  The backend rejects the float
+        # instantly, which looked exactly like a stalled endpoint (3,720
+        # read errors in one 2 s request).  Truncate once, here.
+        timeout = max(1, int(timeout))
         try:
-            return bytes(self.usb.read(EP_IN, size, timeout))
+            data = bytes(self.usb.read(EP_IN, size, timeout))
         except Exception as error:
+            self.counters["read_errors"] += 1
             try:
                 self.usb.clear_halt(EP_IN)
-                return bytes(self.usb.read(EP_IN, size, timeout))
             except Exception:
+                self.counters["read_failures"] += 1
                 raise TransportError(str(error))
+            self.counters["halt_clears"] += 1
+            try:
+                data = bytes(self.usb.read(EP_IN, size, timeout))
+            except Exception:
+                self.counters["read_failures"] += 1
+                raise TransportError(str(error))
+            self.counters["halt_recoveries"] += 1
+        self.counters["bytes_in"] += len(data)
+        return data
 
     def receive(self, timeout=None):
         data = self._read(16384, timeout or self.timeout)
         decoded = self._decode(data)
         if decoded is None:
+            self.counters["malformed"] += 1
             raise TransportError("malformed message")
         return decoded
 
     def read_message(self, timeout=300):
-        """Next message, or None on timeout; used by the streaming loop."""
+        """Next message, or None on timeout/idle; a real read error is remembered separately."""
         if self.pending:
+            self.counters["from_pending"] += 1
             return self.pending.pop(0)
         try:
             data = self._read(16384, timeout)
-        except Exception:
+        except Exception as error:
+            text = str(error).lower()
+            if "timed out" in text or "timeout" in text:
+                self.counters["read_timeouts"] += 1
+                return None
+            # The device is gone (or the I/O failed); an idle timeout must not look
+            # like this, or the caller cannot tell an empty channel from a detach.
+            self.last_read_error = error
             return None
-        return self._decode(data)
+        decoded = self._decode(data)
+        if decoded is None:
+            self.counters["malformed"] += 1
+        return decoded
 
     def request(self, msg_type, payload, expected, timeout=None):
         """Send a request and return the matching reply payload.
@@ -211,12 +266,16 @@ class SmsDevice:
           every skipped transfer against it made a poll fail on a busy stream
           even though only milliseconds had passed;
         * every transfer that is not the reply is kept, in order, in
-          ``pending`` so the reader still delivers it.  A poll must cost zero
-          packets.
+          ``pending`` so the reader still delivers it.  That keeps the host
+          queue from dropping transfers; it does not make the poll free -
+          pausing TS reads for the reply can still cost device-side packets
+          (measured 5-10 CC per 10 s at 500 ms polling).
         """
+        self.counters["requests"] += 1
         self.send(msg_type, payload)
         budget = self.timeout if timeout is None else timeout
         deadline = time.monotonic() + budget / 1000.0
+        failures = 0
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -228,17 +287,31 @@ class SmsDevice:
                 # genuinely late.
                 message = self.receive(remaining * 1000)
             except TransportError:
+                failures += 1
+                self.counters["request_read_failures"] += 1
+                # A stalled or absent endpoint fails *instantly*; without a cap
+                # this loop hammered clear_halt thousands of times in one
+                # timeout (measured: 3,720 in 2 s on a cold ROM).  Three
+                # instant failures mean the device is not answering.
+                if failures >= 3:
+                    self.counters["request_aborted"] += 1
+                    break
                 continue
+            failures = 0
             if message[0] == expected:
+                self.counters["responses"] += 1
                 return message[3]
             if len(self.pending) < self.PENDING_LIMIT:
+                self.counters["queued"] += 1
                 self.pending.append(message)
             else:
+                self.counters["pending_dropped"] += 1
                 self.dropped += 1
+        self.counters["request_timeouts"] += 1
         raise TransportError("no response to 0x%04x" % msg_type)
 
-    def version(self):
-        body = self.request(MSG_VERSION_REQ, b"", MSG_VERSION_RES)
+    def version(self, timeout=None):
+        body = self.request(MSG_VERSION_REQ, b"", MSG_VERSION_RES, timeout=timeout)
         return body.decode("ascii", "replace").strip("\x00").strip()
 
     def set_mode(self, mode=DEVICE_MODE_ISDBT_BDA):
@@ -260,29 +333,37 @@ class SmsDevice:
         """
         payload = struct.pack("<IIII", frequency_khz * 1000, bandwidth,
                               12000000, segment)
-        return self.request(MSG_TUNE_REQ, payload, MSG_TUNE_RES)
+        # 5 s, not the 2 s default.  The 2026-11-20 Pi retest settled why: on a clean
+        # claim the tune acks in 0.00 s, so the old "late reply on aarch64" reading was
+        # the kernel smsusb fighting for the interface, not speed.  The extra budget is
+        # kept as slack for a slow first reply after a claim; it costs nothing on a
+        # healthy chip and it is the request most worth waiting for.
+        return self.request(MSG_TUNE_REQ, payload, MSG_TUNE_RES, timeout=5000)
 
     def statistics(self):
-        """ISDB-T statistics: lock, SNR, power, frequency."""
+        """ISDB-T statistics: lock, SNR, power, frequency, TMCC."""
         body = self.request(MSG_GET_STATISTICS_EX_REQ, b"",
                             MSG_GET_STATISTICS_EX_RES)
-        values = struct.unpack("<%dI" % (len(body) // 4),
-                               body[:len(body) // 4 * 4])
-        if len(values) < 12:
-            raise TransportError("short statistics")
-        # layout: request_result, statistics_type, full_size, is_rf_locked,
-        # is_demod_locked, is_external_lna_on, SNR, RSSI, in_band_pwr, ...
-        return {
-            "rf_locked": bool(values[3]),
-            "demod_locked": bool(values[4]),
-            "lna": bool(values[5]),
-            "snr": _signed(values[6]),
-            "rssi": _signed(values[7]),
-            "power": _signed(values[8]),
-            "carrier_offset": _signed(values[9]),
-            "frequency": values[10],
-            "bandwidth": values[11],
-        }
+        return parse_statistics(body)
 
-    def read_stream(self, size=8192, timeout=300):
-        return self._read(size, timeout)
+
+def parse_statistics(body):
+    """Turn a 654 payload into the statistics dict (pure, so it is testable)."""
+    values = struct.unpack("<%dI" % (len(body) // 4),
+                           body[:len(body) // 4 * 4])
+    if len(values) < 12:
+        raise TransportError("short statistics")
+    # layout: request_result, statistics_type, full_size, is_rf_locked,
+    # is_demod_locked, is_external_lna_on, SNR, RSSI, in_band_pwr, ...
+    return {
+        "rf_locked": bool(values[3]),
+        "demod_locked": bool(values[4]),
+        "lna": bool(values[5]),
+        "snr": _signed(values[6]),
+        "rssi": _signed(values[7]),
+        "power": _signed(values[8]),
+        "carrier_offset": _signed(values[9]),
+        "frequency": values[10],
+        "bandwidth": values[11],
+        "tmcc": tmcc.parse(values),
+    }

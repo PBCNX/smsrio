@@ -1,3 +1,7 @@
+# Copyright (C) 2026 The SMSRio Open Driver Authors
+# SPDX-License-Identifier: GPL-2.0-or-later
+# smsrio-pbcnx
+
 """Siano Rio stream framing.
 
 Every streaming bulk transfer is 4,272 bytes: a 512-byte prefix (504 bytes of

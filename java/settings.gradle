@@ -1,0 +1,17 @@
+// The SMSRIO Java core as a library. The Android adapter is source under java/android/ for a
+// host to copy; it is not a Gradle module here, so a plain clone builds with no Android SDK.
+// GPL-2.0-or-later (see the repository LICENSE).
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = 'smsrio-driver'

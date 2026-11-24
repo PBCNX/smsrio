@@ -1,0 +1,4 @@
+# Siano SMS-series Rio (187f:0600) — let a normal user open the stick without root.
+# Install to /etc/udev/rules.d/ and replug.
+# uaccess covers a desktop session; group plugdev covers SSH, where there is no logind seat.
+SUBSYSTEM=="usb", ATTR{idVendor}=="187f", ATTR{idProduct}=="0600", TAG+="uaccess", GROUP="plugdev", MODE="0660"

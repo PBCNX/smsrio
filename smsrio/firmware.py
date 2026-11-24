@@ -1,3 +1,7 @@
+# Copyright (C) 2026 The SMSRio Open Driver Authors
+# SPDX-License-Identifier: GPL-2.0-or-later
+# smsrio-pbcnx
+
 """Siano Rio firmware: a 12-byte header (checksum, length, start) and payload.
 
 Upload follows smscore's family-2 sequence: data chunks, validity, trigger.
@@ -19,10 +23,6 @@ MSG_DATA_VALIDITY_REQ = 662
 MSG_DATA_VALIDITY_RES = 663
 MSG_DOWNLOAD_TRIGGER_REQ = 664
 MSG_DOWNLOAD_TRIGGER_RES = 665
-MSG_RELOAD_START_REQ = 702
-MSG_RELOAD_START_RES = 703
-MSG_RELOAD_EXEC_REQ = 704
-MSG_RELOAD_EXEC_RES = 705
 
 CHUNK = 240
 
@@ -72,6 +72,7 @@ def _expect(device, expected, timeout=2000):
     long read returns it.
     """
     deadline = time.monotonic() + timeout / 1000.0
+    failures = 0
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -79,7 +80,15 @@ def _expect(device, expected, timeout=2000):
         try:
             message = device.receive(remaining * 1000)
         except TransportError:
+            failures += 1
+            counters = getattr(device, "counters", None)
+            if counters is not None:
+                counters["firmware_read_failures"] += 1
+            if failures >= 3:
+                raise TransportError(
+                    "device stopped answering during upload (0x%04x)" % expected)
             continue
+        failures = 0
         if message[0] == expected:
             return message[3]
 
